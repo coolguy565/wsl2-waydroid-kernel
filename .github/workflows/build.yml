@@ -1,0 +1,221 @@
+name: Build WSL2 Kernel with Android Binder + DRM Nodes
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      kernel_tag:
+        description: 'Microsoft WSL2-Linux-Kernel tag to build (e.g. linux-msft-wsl-6.18.40.1). Leave blank for latest.'
+        required: false
+        default: ''
+      force_rebuild:
+        description: 'Force rebuild even if release exists'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Get target kernel tag
+        id: get-tag
+        run: |
+          if [ -n "${{ github.event.inputs.kernel_tag }}" ]; then
+            TARGET_TAG="${{ github.event.inputs.kernel_tag }}"
+            echo "Using manually specified tag: $TARGET_TAG"
+          else
+            TARGET_TAG=$(curl -s https://api.github.com/repos/microsoft/WSL2-Linux-Kernel/releases/latest | jq -r '.tag_name')
+            echo "Latest Microsoft tag: $TARGET_TAG"
+          fi
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check if we already built this tag
+        id: check-existing
+        run: |
+          RELEASE_TAG="${{ steps.get-tag.outputs.target_tag }}-waydroid"
+          EXISTS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$RELEASE_TAG")
+          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
+            echo "Force rebuild requested."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [ "$EXISTS" = "200" ]; then
+            echo "Release $RELEASE_TAG already exists, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $RELEASE_TAG not found, proceeding."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Install build dependencies
+        if: steps.check-existing.outputs.skip == 'false'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential flex bison libssl-dev libelf-dev \
+            bc dwarves pahole git libdrm-dev
+
+      - name: Clone Microsoft WSL2-Linux-Kernel
+        if: steps.check-existing.outputs.skip == 'false'
+        run: |
+          git clone --depth=1 \
+            --branch "${{ steps.get-tag.outputs.target_tag }}" \
+            https://github.com/microsoft/WSL2-Linux-Kernel.git \
+            kernel-src
+
+      - name: Apply DRM patches (dxgkrnl -> /dev/dri)
+        if: steps.check-existing.outputs.skip == 'false'
+        working-directory: kernel-src
+        run: |
+          echo "=== Applying DRM patches ==="
+          patch -p1 < ${{ github.workspace }}/patches/0001-dxgkrnl-add-drm-headers-and-device.patch
+          patch -p1 < ${{ github.workspace }}/patches/0002-dxgkrnl-add-drm-to-adapter-lifecycle.patch
+          patch -p1 < ${{ github.workspace }}/patches/0003-dxgkrnl-export-get-current-process.patch
+          patch -p1 < ${{ github.workspace }}/patches/0004-dxgkrnl-add-dxgdrm-to-makefile.patch
+          cp ${{ github.workspace }}/src/dxgdrm.c drivers/hv/dxgkrnl/
+          echo "=== DRM patches applied ==="
+
+      - name: Apply Waydroid kernel config
+        if: steps.check-existing.outputs.skip == 'false'
+        working-directory: kernel-src
+        run: |
+          cp Microsoft/config-wsl .config
+
+          # --- Android binder ---
+          scripts/config --enable CONFIG_ANDROID_BINDER_IPC
+          scripts/config --enable CONFIG_ANDROID_BINDERFS
+          scripts/config --set-str CONFIG_ANDROID_BINDER_DEVICES "binder,hwbinder,vndbinder"
+
+          # --- Shared memory ---
+          scripts/config --enable CONFIG_STAGING
+          scripts/config --enable CONFIG_ASHMEM
+
+          # --- Bridge networking ---
+          scripts/config --enable CONFIG_BRIDGE
+          scripts/config --enable CONFIG_BRIDGE_IGMP_SNOOPING
+          scripts/config --enable CONFIG_BRIDGE_VLAN_FILTERING
+          scripts/config --enable CONFIG_STP
+
+          # --- Virtual networking ---
+          scripts/config --enable CONFIG_DUMMY
+          scripts/config --enable CONFIG_TUN
+          scripts/config --enable CONFIG_VETH
+
+          # --- NAT and connection tracking ---
+          scripts/config --enable CONFIG_NF_CONNTRACK
+          scripts/config --enable CONFIG_NF_NAT
+          scripts/config --enable CONFIG_NF_DEFRAG_IPV4
+          scripts/config --enable CONFIG_NF_DEFRAG_IPV6
+          scripts/config --enable CONFIG_IP_NF_IPTABLES
+          scripts/config --enable CONFIG_IP_NF_FILTER
+          scripts/config --enable CONFIG_IP_NF_NAT
+          scripts/config --enable CONFIG_IP_NF_MANGLE
+          scripts/config --enable CONFIG_NETFILTER_XT_TARGET_MASQUERADE
+
+          # --- PSI (Android lmkd) ---
+          scripts/config --enable CONFIG_PSI
+          scripts/config --set-val CONFIG_PSI_DEFAULT_DISABLED 0
+
+          # --- cgroups (LXC) ---
+          scripts/config --enable CONFIG_MEMCG
+          scripts/config --enable CONFIG_MEMCG_SWAP
+          scripts/config --enable CONFIG_CGROUP_BPF
+          scripts/config --enable CONFIG_CPUSETS
+
+          # --- Loop device ---
+          scripts/config --enable CONFIG_BLK_DEV_LOOP
+
+          # --- eBPF ---
+          scripts/config --enable CONFIG_BPF_SYSCALL
+
+          # --- DRM support (needed for dxgkrnl DRM patches) ---
+          scripts/config --enable CONFIG_DRM
+          scripts/config --enable CONFIG_DRM_BUDDY
+          scripts/config --enable CONFIG_DRM_VRAM_HELPER
+          scripts/config --enable CONFIG_DRM_TTM
+          scripts/config --enable CONFIG_DRM_SCHED
+
+          make olddefconfig
+
+          echo "=== Config summary ==="
+          grep -E "CONFIG_ANDROID_BINDER|CONFIG_ASHMEM|CONFIG_BRIDGE[^_]|CONFIG_DRM[^_]|CONFIG_PSI[^_]" .config || true
+
+      - name: Build kernel
+        if: steps.check-existing.outputs.skip == 'false'
+        working-directory: kernel-src
+        run: make -j$(nproc)
+
+      - name: Build and install modules
+        if: steps.check-existing.outputs.skip == 'false'
+        working-directory: kernel-src
+        run: |
+          make -j$(nproc) modules
+          mkdir -p ../modules-staging
+          make modules_install INSTALL_MOD_PATH=../modules-staging
+          find ../modules-staging -type l -name build -delete
+          find ../modules-staging -type l -name source -delete
+
+      - name: Package modules
+        if: steps.check-existing.outputs.skip == 'false'
+        run: |
+          KERNEL_VERSION=$(ls modules-staging/lib/modules/)
+          echo "kernel_version=$KERNEL_VERSION" >> "$GITHUB_ENV"
+          tar -czf modules.tar.gz -C modules-staging/lib/modules "$KERNEL_VERSION"
+
+      - name: Create GitHub release
+        if: steps.check-existing.outputs.skip == 'false'
+        working-directory: kernel-src
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="${{ steps.check-existing.outputs.release_tag }}"
+          MSFT_TAG="${{ steps.get-tag.outputs.target_tag }}"
+
+          gh release delete "$RELEASE_TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          gh release create "$RELEASE_TAG" \
+            arch/x86/boot/bzImage \
+            ../modules.tar.gz \
+            --repo "${{ github.repository }}" \
+            --title "WSL2 Kernel $MSFT_TAG + Binder + DRM" \
+            --notes "Built from Microsoft tag \`$MSFT_TAG\` with Android binder + DRM render nodes for Waydroid ATV.
+
+          **Features:**
+          - Android Binder IPC (waydroid)
+          - DRM render nodes via dxgkrnl patch (waydroid ATV graphics)
+          - Bridge/veth networking (waydroid container networking)
+          - PSI, cgroups, loop devices (container support)
+
+          **Installation:**
+          1. Download \`bzImage\` and \`modules.tar.gz\`
+          2. Save to \`C:\\Users\\YourName\\wsl-kernel\\\`
+          3. Edit \`C:\\Users\\YourName\\.wslconfig\`:
+             \`\`\`ini
+             [wsl2]
+             kernel=C:\\\\Users\\\\YourName\\\\wsl-kernel\\\\bzImage
+             \`\`\`
+          4. Run \`wsl --shutdown\` then relaunch
+          5. Install modules:
+             \`\`\`bash
+             sudo tar -xzf modules.tar.gz -C /lib/modules/
+             sudo depmod -a
+             \`\`\`
+          6. Verify:
+             \`\`\`bash
+             ls /dev/binder
+             ls /dev/dri/
+             \`\`\`"
+
+          gh release delete latest --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          gh release create latest \
+            arch/x86/boot/bzImage \
+            ../modules.tar.gz \
+            --repo "${{ github.repository }}" \
+            --title "Latest: WSL2 Kernel $MSFT_TAG + Binder + DRM" \
+            --notes "Latest build from \`$MSFT_TAG\` with binder + DRM." \
+            --latest
