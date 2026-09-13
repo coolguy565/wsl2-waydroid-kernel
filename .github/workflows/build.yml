@@ -71,14 +71,16 @@ jobs:
 
       - name: Apply DRM patches (dxgkrnl -> /dev/dri)
         if: steps.check-existing.outputs.skip == 'false'
-        working-directory: kernel-src
         run: |
+          echo "=== Workspace: $GITHUB_WORKSPACE ==="
+          ls -la $GITHUB_WORKSPACE/patches/
+          cd kernel-src
           echo "=== Applying DRM patches ==="
-          patch -p1 < ${{ github.workspace }}/patches/0001-dxgkrnl-add-drm-headers-and-device.patch
-          patch -p1 < ${{ github.workspace }}/patches/0002-dxgkrnl-add-drm-to-adapter-lifecycle.patch
-          patch -p1 < ${{ github.workspace }}/patches/0003-dxgkrnl-export-get-current-process.patch
-          patch -p1 < ${{ github.workspace }}/patches/0004-dxgkrnl-add-dxgdrm-to-makefile.patch
-          cp ${{ github.workspace }}/src/dxgdrm.c drivers/hv/dxgkrnl/
+          patch -p1 < $GITHUB_WORKSPACE/patches/0001-dxgkrnl-add-drm-headers-and-device.patch
+          patch -p1 < $GITHUB_WORKSPACE/patches/0002-dxgkrnl-add-drm-to-adapter-lifecycle.patch
+          patch -p1 < $GITHUB_WORKSPACE/patches/0003-dxgkrnl-export-get-current-process.patch
+          patch -p1 < $GITHUB_WORKSPACE/patches/0004-dxgkrnl-add-dxgdrm-to-makefile.patch
+          cp $GITHUB_WORKSPACE/src/dxgdrm.c drivers/hv/dxgkrnl/
           echo "=== DRM patches applied ==="
 
       - name: Apply Waydroid kernel config
