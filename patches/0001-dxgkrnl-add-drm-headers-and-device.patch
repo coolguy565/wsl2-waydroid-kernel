@@ -1,0 +1,44 @@
+diff --git a/drivers/hv/dxgkrnl/dxgkrnl.h b/drivers/hv/dxgkrnl/dxgkrnl.h
+index d816a875d..b939bc927 100644
+--- a/drivers/hv/dxgkrnl/dxgkrnl.h
++++ b/drivers/hv/dxgkrnl/dxgkrnl.h
+@@ -26,6 +26,10 @@
+ #include <linux/miscdevice.h>
+ #include <linux/pci.h>
+ #include <linux/hyperv.h>
++#include <drm/drm_drv.h>
++#include <drm/drm_device.h>
++#include <drm/drm_file.h>
++#include <drm/drm_ioctl.h>
+ #include <uapi/misc/d3dkmthk.h>
+ #include <linux/version.h>
+ #include "misc.h"
+@@ -346,6 +350,7 @@ void dxgglobal_signal_host_event(u64 event_id);
+ struct dxghostevent *dxgglobal_get_host_event(u64 event_id);
+ int dxgglobal_acquire_channel_lock(void);
+ void dxgglobal_release_channel_lock(void);
++struct dxgprocess *dxgglobal_get_current_process(void);
+ 
+ /*
+  * Describes adapter information for each process
+@@ -482,6 +487,8 @@ struct dxgadapter {
+ 	u16			device_instance_id[WIN_MAX_PATH];
+ 	bool			compute_only;
+ 	bool			stopping_adapter;
++	/* DRM device for this adapter */
++	struct drm_device	*drm_dev;
+ };
+ 
+ int dxgadapter_set_vmbus(struct dxgadapter *adapter, struct hv_device *hdev);
+@@ -507,6 +514,11 @@ void dxgadapter_remove_process(struct dxgprocess_adapter *process_info);
+ void dxgadapter_remove_shared_resource(struct dxgadapter *adapter,
+ 				       struct dxgsharedresource *object);
+ 
++/* DRM integration functions */
++int dxg_drm_init_adapter(struct dxgadapter *adapter);
++void dxg_drm_destroy_adapter(struct dxgadapter *adapter);
++
++
+ /*
+  * The object represent the device object.
+  * The following objects take reference on the device

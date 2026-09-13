@@ -1,0 +1,13 @@
+diff --git a/drivers/hv/dxgkrnl/dxgmodule.c b/drivers/hv/dxgkrnl/dxgmodule.c
+index c2a4a2a21..fff7ca812 100644
+--- a/drivers/hv/dxgkrnl/dxgmodule.c
++++ b/drivers/hv/dxgkrnl/dxgmodule.c
+@@ -348,7 +348,7 @@ static void dxgglobal_stop_adapters(void)
+  * Returns dxgprocess for the current executing process.
+  * Creates dxgprocess if it doesn't exist.
+  */
+-static struct dxgprocess *dxgglobal_get_current_process(void)
++struct dxgprocess *dxgglobal_get_current_process(void)
+ {
+ 	/*
+ 	 * Find the DXG process for the current process.

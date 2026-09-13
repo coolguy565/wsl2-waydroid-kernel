@@ -1,0 +1,30 @@
+diff --git a/drivers/hv/dxgkrnl/dxgadapter.c b/drivers/hv/dxgkrnl/dxgadapter.c
+index 6d3cabb24..187a03f07 100644
+--- a/drivers/hv/dxgkrnl/dxgadapter.c
++++ b/drivers/hv/dxgkrnl/dxgadapter.c
+@@ -95,6 +95,14 @@ void dxgadapter_start(struct dxgadapter *adapter)
+ 	}
+ 
+ 	adapter->adapter_state = DXGADAPTER_STATE_ACTIVE;
++	
++	/* Register DRM device for this adapter */
++	ret = dxg_drm_init_adapter(adapter);
++	if (ret) {
++		DXG_ERR("Failed to initialize DRM for adapter %p: %d", adapter, ret);
++		/* Continue anyway - DRM is optional for backward compatibility */
++	}
++	
+ 	DXG_TRACE("Adapter started %p", adapter);
+ }
+ 
+@@ -126,6 +134,10 @@ void dxgadapter_stop(struct dxgadapter *adapter)
+ 		dxgvmb_send_close_adapter(adapter);
+ 		dxgadapter_release_lock_exclusive(adapter);
+ 	}
++	
++	/* Unregister DRM device before destroying vmbus channel */
++	dxg_drm_destroy_adapter(adapter);
++	
+ 	dxgvmbuschannel_destroy(&adapter->channel);
+ 
+ 	adapter->adapter_state = DXGADAPTER_STATE_STOPPED;
