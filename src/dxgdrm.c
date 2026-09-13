@@ -1,11 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-/*
- * Copyright (c) 2022, Microsoft Corporation.
- *
- * DRM integration for dxgkrnl driver
- */
-
 #include <linux/module.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_file.h>
@@ -26,8 +20,6 @@ static int dxg_drm_open(struct drm_device *drm_dev, struct drm_file *file)
 	struct dxgadapter *adapter = drm_dev->dev_private;
 
 	(void)adapter;
-	DXG_TRACE("DRM open: %p, adapter: %p", file, adapter);
-
 	process = dxgglobal_get_current_process();
 	if (!process) {
 		DXG_ERR("Failed to create dxgprocess");
@@ -41,8 +33,6 @@ static int dxg_drm_open(struct drm_device *drm_dev, struct drm_file *file)
 static void dxg_drm_postclose(struct drm_device *drm_dev, struct drm_file *file)
 {
 	struct dxgprocess *process = file->driver_priv;
-
-	DXG_TRACE("DRM postclose: %p, process: %p", file, process);
 
 	if (process) {
 		kref_put(&process->process_kref, dxgprocess_release);
@@ -63,18 +53,26 @@ static long dxg_drm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 }
 
 static const struct file_operations dxg_drm_fops = {
-	.owner = THIS_MODULE,
-	.open = drm_open,
-	.release = drm_release,
-	.unlocked_ioctl = dxg_drm_ioctl,
-	.compat_ioctl = dxg_drm_ioctl,
-	.poll = drm_poll,
-	.read = drm_read,
-	.llseek = noop_llseek,
+	.owner		= THIS_MODULE,
+	.open		= drm_open,
+	.release	= drm_release,
+	.unlocked_ioctl	= dxg_drm_ioctl,
+	.compat_ioctl	= dxg_drm_ioctl,
+	.poll		= drm_poll,
+	.read		= drm_read,
+	.llseek		= noop_llseek,
 };
 
-DRM_RENDER_DRIVER_DECLARE(dxg_drm_driver, DRIVER_NAME, DRIVER_DESC,
-			   DRIVER_MAJOR, DRIVER_MINOR, DRIVER_PATCHLEVEL);
+static const struct drm_driver dxg_drm_driver = {
+	.driver_features = DRIVER_RENDER,
+	.open = dxg_drm_open,
+	.postclose = dxg_drm_postclose,
+	.name = DRIVER_NAME,
+	.desc = DRIVER_DESC,
+	.major = DRIVER_MAJOR,
+	.minor = DRIVER_MINOR,
+	.patchlevel = DRIVER_PATCHLEVEL,
+};
 
 int dxg_drm_init_adapter(struct dxgadapter *adapter)
 {
@@ -86,8 +84,6 @@ int dxg_drm_init_adapter(struct dxgadapter *adapter)
 		return -EINVAL;
 	}
 
-	DXG_TRACE("Initializing DRM for adapter %p", adapter);
-
 	drm_dev = drm_dev_alloc(&dxg_drm_driver, &adapter->pci_dev->dev);
 	if (IS_ERR(drm_dev)) {
 		ret = PTR_ERR(drm_dev);
@@ -98,7 +94,7 @@ int dxg_drm_init_adapter(struct dxgadapter *adapter)
 	drm_dev->dev_private = adapter;
 	adapter->drm_dev = drm_dev;
 
-	ret = drm_dev_register_with_fops(drm_dev, 0, &dxg_drm_fops);
+	ret = drm_dev_register(drm_dev, 0);
 	if (ret) {
 		DXG_ERR("Failed to register DRM device: %d", ret);
 		drm_dev_put(drm_dev);
@@ -106,7 +102,6 @@ int dxg_drm_init_adapter(struct dxgadapter *adapter)
 		return ret;
 	}
 
-	DXG_TRACE("DRM device registered for adapter %p", adapter);
 	return 0;
 }
 
@@ -114,8 +109,6 @@ void dxg_drm_destroy_adapter(struct dxgadapter *adapter)
 {
 	if (!adapter || !adapter->drm_dev)
 		return;
-
-	DXG_TRACE("Destroying DRM for adapter %p", adapter);
 
 	drm_dev_unregister(adapter->drm_dev);
 	drm_dev_put(adapter->drm_dev);
